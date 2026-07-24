@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GAYkachaet — видео в идеальном качестве</title>
+<meta name="description" content="Вставь ссылку — скачай видео в идеальнейшем качестве. YouTube, TikTok, Instagram, X, Twitch и сотни других." />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⬇️</text></svg>" />
+<style>
+  :root{
+    --bg:#0b0713;
+    --card:rgba(255,255,255,.04);
+    --stroke:rgba(255,255,255,.10);
+    --text:#f4f0ff;
+    --muted:#a99fc7;
+    --ok:#26d07c;
+    --err:#ff5c7a;
+    --g1:#ff2e97; --g2:#ff8a3d; --g3:#ffd23f; --g4:#2fe08a; --g5:#38b6ff; --g6:#a855f7;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+    background:
+      radial-gradient(1100px 700px at 12% -8%, rgba(168,85,247,.22), transparent 60%),
+      radial-gradient(900px 600px at 110% 10%, rgba(56,182,255,.18), transparent 55%),
+      radial-gradient(800px 800px at 50% 120%, rgba(255,46,151,.14), transparent 60%),
+      var(--bg);
+    color:var(--text);
+    min-height:100%;
+    display:flex; align-items:center; justify-content:center;
+    padding:28px 18px;
+  }
+  .wrap{width:100%;max-width:640px;text-align:center}
+
+  .logo{
+    font-weight:900; letter-spacing:-.03em; line-height:1;
+    font-size:clamp(44px,11vw,84px);
+    margin:0 0 10px;
+  }
+  .logo .gay{
+    background:linear-gradient(90deg,var(--g1),var(--g2),var(--g3),var(--g4),var(--g5),var(--g6));
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+  .tag{color:var(--muted); font-size:clamp(15px,2.6vw,18px); margin:0 auto 30px; max-width:460px}
+
+  .card{
+    background:var(--card);
+    border:1px solid var(--stroke);
+    border-radius:22px;
+    padding:20px;
+    backdrop-filter:blur(14px);
+    box-shadow:0 30px 80px -40px rgba(0,0,0,.9);
+  }
+  .field{display:flex; gap:10px; flex-wrap:wrap}
+  input[type=url]{
+    flex:1 1 260px; min-width:0;
+    background:rgba(0,0,0,.28);
+    border:1px solid var(--stroke);
+    border-radius:14px;
+    color:var(--text);
+    font-size:16px;
+    padding:16px 16px;
+    outline:none;
+    transition:border-color .15s, box-shadow .15s;
+  }
+  input[type=url]::placeholder{color:#7d7597}
+  input[type=url]:focus{border-color:rgba(255,46,151,.7); box-shadow:0 0 0 4px rgba(255,46,151,.14)}
+
+  button.go{
+    flex:0 0 auto;
+    border:0; cursor:pointer;
+    border-radius:14px;
+    padding:16px 26px;
+    font-size:16px; font-weight:800; letter-spacing:.01em;
+    color:#150a12;
+    background:linear-gradient(90deg,var(--g1),var(--g6));
+    box-shadow:0 10px 30px -10px rgba(255,46,151,.6);
+    transition:transform .06s ease, opacity .15s, filter .15s;
+  }
+  button.go:hover{filter:brightness(1.06)}
+  button.go:active{transform:translateY(1px)}
+  button.go:disabled{opacity:.55; cursor:default; filter:grayscale(.2)}
+
+  .opts{display:flex; align-items:center; justify-content:center; gap:18px; margin-top:14px; flex-wrap:wrap}
+  .chk{display:inline-flex; align-items:center; gap:8px; color:var(--muted); font-size:14px; cursor:pointer; user-select:none}
+  .chk input{width:16px;height:16px;accent-color:var(--g1)}
+
+  .status{margin-top:20px; min-height:0; text-align:left}
+  .status.show{min-height:64px}
+  .bar{
+    height:12px; border-radius:999px; overflow:hidden;
+    background:rgba(255,255,255,.08); border:1px solid var(--stroke);
+    position:relative;
+  }
+  .bar > i{
+    display:block; height:100%; width:0%;
+    border-radius:999px;
+    background:linear-gradient(90deg,var(--g1),var(--g3),var(--g4),var(--g5));
+    background-size:220% 100%;
+    transition:width .25s ease;
+  }
+  .bar.indef > i{
+    width:40% !important;
+    animation:slide 1.1s infinite ease-in-out, hue 3s linear infinite;
+  }
+  @keyframes slide{0%{margin-left:-40%}100%{margin-left:100%}}
+  @keyframes hue{0%{background-position:0 0}100%{background-position:220% 0}}
+  .meta{display:flex; justify-content:space-between; gap:12px; margin-top:10px; font-size:13.5px; color:var(--muted)}
+  .meta .lbl{color:var(--text); font-weight:600}
+  .result{
+    margin-top:6px; padding:16px; border-radius:14px;
+    background:rgba(38,208,124,.10); border:1px solid rgba(38,208,124,.35);
+    display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  }
+  .result.err{background:rgba(255,92,122,.10); border-color:rgba(255,92,122,.4)}
+  .result .ico{font-size:22px}
+  .result .txt{flex:1 1 200px; min-width:0}
+  .result .name{font-weight:700; word-break:break-word}
+  .result .sub{font-size:13px; color:var(--muted); margin-top:2px}
+  .result a.dl{
+    color:#eafff4; text-decoration:none; font-weight:800; font-size:14px;
+    padding:10px 16px; border-radius:11px; border:1px solid rgba(38,208,124,.5);
+    background:rgba(38,208,124,.18); white-space:nowrap;
+  }
+
+  .hint{margin-top:26px; color:#8b83a6; font-size:12.5px; line-height:1.6}
+  .hint b{color:#c9c0e6; font-weight:600}
+  .foot{margin-top:14px; color:#6f6890; font-size:12px}
+  .foot code{background:rgba(255,255,255,.06); padding:2px 6px; border-radius:6px}
+</style>
+</head>
+<body>
+  <main class="wrap">
+    <h1 class="logo"><span class="gay">GAY</span>качает</h1>
+    <p class="tag">Вставь ссылку — заберёшь видео в идеальнейшем качестве. Без рекламы, без лишних кликов.</p>
+
+    <section class="card">
+      <form id="form" class="field" autocomplete="off">
+        <input id="url" type="url" inputmode="url" placeholder="https://youtube.com/watch?v=…" required />
+        <button id="go" class="go" type="submit">Скачать</button>
+      </form>
+      <div class="opts">
+        <label class="chk"><input id="audio" type="checkbox" /> Только звук (MP3)</label>
+      </div>
+
+      <div id="status" class="status" aria-live="polite"></div>
+    </section>
+
+    <p class="hint">
+      Работает с <b>YouTube</b>, <b>TikTok</b>, <b>Instagram</b>, <b>X&nbsp;(Twitter)</b>,
+      <b>Twitch</b>, <b>VK</b>, <b>Reddit</b> и сотнями других сайтов.<br />
+      Качество выбирается автоматически — максимально доступное видео&nbsp;+&nbsp;звук склеиваются в один файл.
+    </p>
+    <p class="foot">На движке <code>yt-dlp</code> + <code>ffmpeg</code>. Скачивай только то, на что у тебя есть права.</p>
+  </main>
+
+<script>
+(function () {
+  var form = document.getElementById('form');
+  var urlInput = document.getElementById('url');
+  var audio = document.getElementById('audio');
+  var go = document.getElementById('go');
+  var status = document.getElementById('status');
+  var es = null;
+  var busy = false;
+
+  var PHASES = {
+    download: 'Загрузка…',
+    merge: 'Склейка видео и звука…',
+    convert: 'Обработка…'
+  };
+
+  function esc(s){ return (s||'').replace(/[&<>"]/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+  function renderProgress(p) {
+    var pct = (p && p.percent != null) ? p.percent : null;
+    var indef = pct == null || (p && p.phase && p.phase !== 'download');
+    var label = PHASES[p && p.phase] || 'Загрузка…';
+    var right = [];
+    if (p && p.speed) right.push(p.speed);
+    if (p && p.eta) right.push('ETA ' + p.eta);
+    if (p && p.size) right.push(p.size);
+
+    status.className = 'status show';
+    status.innerHTML =
+      '<div class="bar' + (indef ? ' indef' : '') + '"><i style="width:' +
+        (pct != null ? pct : 0) + '%"></i></div>' +
+      '<div class="meta"><span class="lbl">' + esc(label) +
+        (pct != null && !indef ? ' ' + pct.toFixed(1) + '%' : '') +
+      '</span><span>' + esc(right.join(' · ')) + '</span></div>';
+  }
+
+  function renderDone(token, filename) {
+    status.className = 'status show';
+    status.innerHTML =
+      '<div class="result"><span class="ico">✅</span>' +
+      '<div class="txt"><div class="name">' + esc(filename) + '</div>' +
+      '<div class="sub">Готово. Загрузка началась автоматически.</div></div>' +
+      '<a class="dl" href="/api/file/' + token + '">Скачать снова</a></div>';
+  }
+
+  function renderError(msg) {
+    status.className = 'status show';
+    status.innerHTML =
+      '<div class="result err"><span class="ico">⚠️</span>' +
+      '<div class="txt"><div class="name">Не получилось</div>' +
+      '<div class="sub">' + esc(msg || 'Неизвестная ошибка') + '</div></div></div>';
+  }
+
+  function stop() {
+    if (es) { es.close(); es = null; }
+    busy = false;
+    go.disabled = false;
+    go.textContent = 'Скачать';
+  }
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (busy) return;
+    var url = urlInput.value.trim();
+    if (!/^https?:\/\//i.test(url)) { renderError('Вставь ссылку, начинающуюся с http(s)://'); return; }
+
+    busy = true;
+    go.disabled = true;
+    go.textContent = 'Качаю…';
+    renderProgress({ percent: null, phase: 'download' });
+
+    var q = '/api/download?url=' + encodeURIComponent(url) + '&audio=' + (audio.checked ? '1' : '0');
+    es = new EventSource(q);
+
+    es.addEventListener('progress', function (ev) { renderProgress(JSON.parse(ev.data)); });
+    es.addEventListener('phase', function (ev) {
+      var d = JSON.parse(ev.data);
+      renderProgress({ percent: null, phase: d.phase });
+    });
+    es.addEventListener('done', function (ev) {
+      var d = JSON.parse(ev.data);
+      renderDone(d.token, d.filename);
+      // старт скачивания
+      var a = document.createElement('a');
+      a.href = '/api/file/' + d.token;
+      a.download = d.filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      stop();
+    });
+    es.addEventListener('fail', function (ev) {
+      var d = JSON.parse(ev.data);
+      renderError(d.message);
+      stop();
+    });
+    es.addEventListener('error', function () {
+      // разрыв соединения (не серверный fail)
+      if (busy) { renderError('Соединение прервано. Попробуй ещё раз.'); stop(); }
+    });
+  });
+})();
+</script>
+</body>
+</html>
