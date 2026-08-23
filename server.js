@@ -67,10 +67,25 @@ function handleDownload(req, res, query) {
   const audioOnly = query.get('audio') === '1';
   const compat = query.get('quality') === 'compat';
 
+  // Обрезка: start и dur в секундах. Качается только нужный кусок.
+  const trimStart = query.has('start') ? parseFloat(query.get('start')) : null;
+  const trimDur = query.has('dur') ? parseFloat(query.get('dur')) : null;
+  const trim = trimStart !== null || trimDur !== null;
+
   if (!/^https?:\/\//i.test(url)) {
     sseInit(res);
     sseSend(res, 'fail', { message: 'Нужна корректная ссылка (http/https).' });
     return res.end();
+  }
+
+  if (trim) {
+    const badStart = !Number.isFinite(trimStart) || trimStart < 0;
+    const badDur = !Number.isFinite(trimDur) || trimDur <= 0 || trimDur > 3600;
+    if (badStart || badDur) {
+      sseInit(res);
+      sseSend(res, 'fail', { message: 'Неверное время обрезки: укажи начало и длительность (до часа).' });
+      return res.end();
+    }
   }
 
   sseInit(res);
@@ -92,6 +107,16 @@ function handleDownload(req, res, query) {
     '--print-to-file', 'after_move:%(filepath)s', finalPathFile,
     '-o', outTemplate,
   ];
+
+  if (trim) {
+    // Качаем только нужный отрезок (yt-dlp тянет по HTTP только эти байты).
+    // --force-keyframes-at-cuts даёт точный старт (иначе резалось бы по
+    // ближайшему ключевому кадру, с промахом в пару секунд).
+    args.push(
+      '--download-sections', `*${trimStart}-${trimStart + trimDur}`,
+      '--force-keyframes-at-cuts'
+    );
+  }
 
   if (audioOnly) {
     args.push('-x', '--audio-format', 'mp3', '--audio-quality', '0');

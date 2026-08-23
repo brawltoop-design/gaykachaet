@@ -98,6 +98,20 @@
     background:linear-gradient(90deg, rgba(255,46,151,.25), rgba(168,85,247,.25));
     color:var(--text);
   }
+  .trim{
+    display:flex; align-items:flex-end; justify-content:center; gap:14px;
+    margin-top:12px; flex-wrap:wrap;
+  }
+  .trim label{
+    display:flex; flex-direction:column; gap:5px; text-align:left;
+    color:var(--muted); font-size:12.5px; font-weight:600;
+  }
+  .trim input{
+    width:110px; background:rgba(0,0,0,.28); border:1px solid var(--stroke);
+    border-radius:10px; color:var(--text); font-size:15px; padding:9px 11px; outline:none;
+  }
+  .trim input:focus{border-color:rgba(255,46,151,.7)}
+  .trimhint{flex-basis:100%; color:#8b83a6; font-size:12px; text-align:center}
   .warnbox{
     margin-top:10px; padding:12px 14px; border-radius:12px; font-size:13.5px; line-height:1.5;
     background:rgba(255,210,63,.08); border:1px solid rgba(255,210,63,.35); color:#ffe9a8;
@@ -170,6 +184,16 @@
             <span>1080p <small>играет везде</small></span></label>
         </div>
         <label class="chk"><input id="audio" type="checkbox" /> Только звук (MP3)</label>
+        <label class="chk"><input id="trimOn" type="checkbox" /> ✂️ Вырезать кусок</label>
+      </div>
+      <div class="trim" id="trimRow" hidden>
+        <label>Начало
+          <input id="trimStart" type="text" inputmode="numeric" placeholder="0:42" value="0:00" />
+        </label>
+        <label>Длительность, сек
+          <input id="trimDur" type="number" min="1" max="3600" step="1" value="15" />
+        </label>
+        <span class="trimhint">качается только этот кусок — быстро и без лишних мегабайт</span>
       </div>
 
       <div id="status" class="status" aria-live="polite"></div>
@@ -192,6 +216,25 @@
   var status = document.getElementById('status');
   var es = null;
   var busy = false;
+  var trimOn = document.getElementById('trimOn');
+  var trimRow = document.getElementById('trimRow');
+  var trimStart = document.getElementById('trimStart');
+  var trimDur = document.getElementById('trimDur');
+
+  trimOn.addEventListener('change', function () {
+    trimRow.hidden = !trimOn.checked;
+  });
+
+  // «90», «1:30», «01:02:03» → секунды; null если мусор
+  function parseTime(s) {
+    s = (s || '').trim();
+    if (!s) return null;
+    if (!/^\d+(:\d{1,2}){0,2}(\.\d+)?$/.test(s)) return null;
+    var parts = s.split(':').map(Number);
+    var sec = 0;
+    for (var i = 0; i < parts.length; i++) sec = sec * 60 + parts[i];
+    return sec;
+  }
 
   var PHASES = {
     download: 'Загрузка…',
@@ -274,6 +317,15 @@
     var q = '/api/download?url=' + encodeURIComponent(url) +
       '&audio=' + (audio.checked ? '1' : '0') +
       '&quality=' + (qsel ? qsel.value : 'max');
+
+    if (trimOn.checked) {
+      var st = parseTime(trimStart.value);
+      var du = parseFloat(trimDur.value);
+      if (st === null) { stop(); renderError('Начало обрезки: укажи как «42» (сек) или «1:30».'); return; }
+      if (!isFinite(du) || du <= 0) { stop(); renderError('Длительность обрезки должна быть больше нуля.'); return; }
+      q += '&start=' + st + '&dur=' + du;
+    }
+
     es = new EventSource(q);
 
     es.addEventListener('progress', function (ev) { renderProgress(JSON.parse(ev.data)); });
