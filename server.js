@@ -66,6 +66,8 @@ function handleDownload(req, res, query) {
   const url = (query.get('url') || '').trim();
   const audioOnly = query.get('audio') === '1';
   const compat = query.get('quality') === 'compat';
+  // «Файл для QuickTime/Premiere»: если скачалось в VP9/AV1 — перекодировать в H.264.
+  const wantH264 = query.get('h264') === '1';
 
   // Обрезка: start и dur в секундах. Качается только нужный кусок.
   const trimStart = query.has('start') ? parseFloat(query.get('start')) : null;
@@ -147,6 +149,7 @@ function handleDownload(req, res, query) {
   let finished = false;
   let lastError = '';
   let phase = 'download';
+  let ffmpegChild = null; // живой процесс конвертации — убить при уходе клиента
 
   const yt = spawn('yt-dlp', args, { windowsHide: true });
 
@@ -219,18 +222,43 @@ function handleDownload(req, res, query) {
       return;
     }
 
-    const { token, filename } = registerFile(dir, filepath);
-    probeVcodec(filepath, (vcodec) => {
-      sseSend(res, 'done', { token, filename, vcodec });
-      res.end();
-    });
+    finishUp(filepath);
   });
 
-  // Клиент ушёл — гасим процесс и чистим временную папку.
+  function finishUp(filepath) {
+    probeMedia(filepath, (info) => {
+      const exotic = info.vcodec && !/^(h264|avc|hevc|h265|mpeg4)/i.test(info.vcodec);
+      if (!(wantH264 && !audioOnly && exotic)) {
+        const { token, filename } = registerFile(dir, filepath);
+        sseSend(res, 'done', { token, filename, vcodec: info.vcodec });
+        return res.end();
+      }
+
+      sseSend(res, 'phase', { phase: 'h264', label: 'Конвертация в H.264…' });
+      transcodeH264(filepath, info, {
+        onSpawn: (child) => { ffmpegChild = child; },
+        onProgress: (p) => sseSend(res, 'progress', {
+          percent: p.percent, size: '', speed: p.speed, eta: '', phase: 'h264',
+        }),
+        onDone: (outPath) => {
+          const finalPath = outPath || filepath; // не вышло — отдаём как есть, фронт предупредит
+          probeMedia(finalPath, (info2) => {
+            const { token, filename } = registerFile(dir, finalPath);
+            sseSend(res, 'done', { token, filename, vcodec: info2.vcodec });
+            res.end();
+          });
+        },
+      });
+    });
+  }
+
+  // Клиент ушёл — гасим процессы и чистим временную папку.
   req.on('close', () => {
-    if (finished) return;
+    if (finished && !ffmpegChild) return;
+    if (finished && ffmpegChild && ffmpegChild.exitCode !== null) return;
     finished = true;
     try { yt.kill('SIGKILL'); } catch (_) {}
+    try { if (ffmpegChild) ffmpegChild.kill('SIGKILL'); } catch (_) {}
     fs.rm(dir, { recursive: true, force: true }, () => {});
   });
 }
@@ -373,21 +401,95 @@ function shorten(s) {
   return s.length > 160 ? s.slice(0, 157) + '…' : s;
 }
 
-// Кодек видеодорожки готового файла — фронт предупредит, если QuickTime его не осилит.
-function probeVcodec(filepath, cb) {
+// Кодеки, высота и длительность готового файла (для подсказок и конвертации).
+function probeMedia(filepath, cb) {
   const ff = spawn('ffprobe', [
     '-v', 'error',
-    '-select_streams', 'v:0',
-    '-show_entries', 'stream=codec_name',
-    '-of', 'csv=p=0',
+    '-show_entries', 'stream=codec_type,codec_name,height',
+    '-show_entries', 'format=duration',
+    '-of', 'json',
     filepath,
   ], { windowsHide: true });
+  const empty = { vcodec: '', acodec: '', height: 0, duration: 0 };
   let out = '';
   let called = false;
   const once = (v) => { if (!called) { called = true; cb(v); } };
   ff.stdout.on('data', (d) => { out += d; });
-  ff.on('error', () => once(''));
-  ff.on('close', () => once(out.trim().split('\n')[0] || ''));
+  ff.on('error', () => once(empty));
+  ff.on('close', () => {
+    try {
+      const j = JSON.parse(out);
+      const v = (j.streams || []).find((s) => s.codec_type === 'video');
+      const a = (j.streams || []).find((s) => s.codec_type === 'audio');
+      once({
+        vcodec: (v && v.codec_name) || '',
+        acodec: (a && a.codec_name) || '',
+        height: (v && v.height) || 0,
+        duration: parseFloat(j.format && j.format.duration) || 0,
+      });
+    } catch (_) { once(empty); }
+  });
+}
+
+// Перекодирование VP9/AV1 → H.264: на маке аппаратно (VideoToolbox), иначе libx264.
+// Успех: удаляем оригинал, отдаём outPath. Провал: onDone(null) — отдадим оригинал.
+function transcodeH264(inPath, info, hooks) {
+  const outPath = inPath.replace(/\.[^.\/]+$/, '') + ' (H.264).mp4';
+  const h = info.height || 1080;
+  const bitrate = h >= 2160 ? '40M' : h >= 1440 ? '24M' : h >= 1080 ? '12M' : '8M';
+  const audioArgs = /^(aac|mp4a)/i.test(info.acodec || '')
+    ? ['-c:a', 'copy']
+    : ['-c:a', 'aac', '-b:a', '192k'];
+
+  const attempt = (videoArgs, fallback) => {
+    const ff = spawn('ffmpeg', [
+      '-y', '-hide_banner', '-loglevel', 'error',
+      '-i', inPath,
+      '-pix_fmt', 'yuv420p',
+      ...videoArgs,
+      ...audioArgs,
+      '-movflags', '+faststart',
+      '-progress', 'pipe:1',
+      outPath,
+    ], { windowsHide: true });
+    hooks.onSpawn(ff);
+
+    const durUs = (info.duration || 0) * 1e6;
+    let pct = 0;
+    let speed = '';
+    let buf = '';
+    ff.stdout.on('data', (d) => {
+      buf += d.toString('utf8');
+      let idx;
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        // ffmpeg пишет out_time_us / out_time_ms — оба в микросекундах
+        const t = line.match(/^out_time_[um]s=(\d+)/);
+        if (t && durUs > 0) pct = Math.min(100, (parseInt(t[1], 10) / durUs) * 100);
+        const s = line.match(/^speed=\s*([\d.]+x)/);
+        if (s) speed = s[1];
+        if (line.startsWith('progress=')) {
+          hooks.onProgress({ percent: Math.round(pct * 10) / 10, speed });
+        }
+      }
+    });
+    ff.on('error', () => (fallback ? fallback() : hooks.onDone(null)));
+    ff.on('close', (code) => {
+      if (code === 0) {
+        fs.rm(inPath, { force: true }, () => hooks.onDone(outPath));
+      } else if (fallback) {
+        fallback();
+      } else {
+        fs.rm(outPath, { force: true }, () => hooks.onDone(null));
+      }
+    });
+  };
+
+  const vt = ['-c:v', 'h264_videotoolbox', '-b:v', bitrate];
+  const x264 = ['-c:v', 'libx264', '-preset', 'fast', '-crf', '18'];
+  if (process.platform === 'darwin') attempt(vt, () => attempt(x264, null));
+  else attempt(x264, null);
 }
 
 // Переводим частые ошибки yt-dlp в понятные подсказки.

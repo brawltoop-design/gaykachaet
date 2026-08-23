@@ -102,6 +102,7 @@
     display:flex; align-items:flex-end; justify-content:center; gap:14px;
     margin-top:12px; flex-wrap:wrap;
   }
+  .trim[hidden]{display:none}
   .trim label{
     display:flex; flex-direction:column; gap:5px; text-align:left;
     color:var(--muted); font-size:12.5px; font-weight:600;
@@ -185,6 +186,8 @@
         </div>
         <label class="chk"><input id="audio" type="checkbox" /> Только звук (MP3)</label>
         <label class="chk"><input id="trimOn" type="checkbox" /> ✂️ Вырезать кусок</label>
+        <label class="chk" title="Если видео скачалось в VP9/AV1 — перекодировать в H.264, чтобы открывалось в QuickTime и Premiere">
+          <input id="h264" type="checkbox" checked /> 🎬 H.264 для QuickTime/Premiere</label>
       </div>
       <div class="trim" id="trimRow" hidden>
         <label>Начало
@@ -239,7 +242,8 @@
   var PHASES = {
     download: 'Загрузка…',
     merge: 'Склейка видео и звука…',
-    convert: 'Обработка…'
+    convert: 'Обработка…',
+    h264: 'Конвертация в H.264…'
   };
 
   function esc(s){ return (s||'').replace(/[&<>"]/g, function(c){
@@ -247,8 +251,8 @@
 
   function renderProgress(p) {
     var pct = (p && p.percent != null) ? p.percent : null;
-    var indef = pct == null || (p && p.phase && p.phase !== 'download');
-    var label = PHASES[p && p.phase] || 'Загрузка…';
+    var indef = pct == null;
+    var label = (p && p.label) || PHASES[p && p.phase] || 'Загрузка…';
     var right = [];
     if (p && p.speed) right.push(p.speed);
     if (p && p.eta) right.push('ETA ' + p.eta);
@@ -316,7 +320,8 @@
     var qsel = document.querySelector('#qualitySeg input:checked');
     var q = '/api/download?url=' + encodeURIComponent(url) +
       '&audio=' + (audio.checked ? '1' : '0') +
-      '&quality=' + (qsel ? qsel.value : 'max');
+      '&quality=' + (qsel ? qsel.value : 'max') +
+      '&h264=' + (document.getElementById('h264').checked ? '1' : '0');
 
     if (trimOn.checked) {
       var st = parseTime(trimStart.value);
@@ -331,7 +336,7 @@
     es.addEventListener('progress', function (ev) { renderProgress(JSON.parse(ev.data)); });
     es.addEventListener('phase', function (ev) {
       var d = JSON.parse(ev.data);
-      renderProgress({ percent: null, phase: d.phase });
+      renderProgress({ percent: null, phase: d.phase, label: d.label });
     });
     es.addEventListener('done', function (ev) {
       var d = JSON.parse(ev.data);
