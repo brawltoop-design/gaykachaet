@@ -168,7 +168,7 @@ function handleDownload(req, res, query) {
 
     if (code !== 0) {
       sseSend(res, 'fail', {
-        message: shorten(lastError) || 'Не удалось скачать это видео.',
+        message: friendlyError(lastError) || 'Не удалось скачать это видео.',
       });
       res.end();
       fs.rm(dir, { recursive: true, force: true }, () => {});
@@ -333,4 +333,22 @@ function clean(s) {
 function shorten(s) {
   if (!s) return '';
   return s.length > 160 ? s.slice(0, 157) + '…' : s;
+}
+
+// Переводим частые ошибки yt-dlp в понятные подсказки.
+function friendlyError(s) {
+  if (!s) return '';
+  if (/403|Forbidden/i.test(s)) {
+    return 'YouTube отклонил запрос (403). Обычно это устаревший yt-dlp — обнови его: brew upgrade yt-dlp (или pip install -U yt-dlp) и попробуй снова.';
+  }
+  if (/Sign in to confirm|not a bot/i.test(s)) {
+    return 'YouTube требует подтверждение (антибот). С серверных IP это частое дело — нужны cookies браузера, см. README.';
+  }
+  if (/Private video|Video unavailable|removed/i.test(s)) {
+    return 'Видео недоступно: приватное, удалено или закрыто по региону.';
+  }
+  if (/Unsupported URL/i.test(s)) {
+    return 'Этот сайт не поддерживается yt-dlp. Проверь ссылку.';
+  }
+  return shorten(s);
 }
