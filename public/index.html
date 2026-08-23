@@ -85,6 +85,28 @@
   .opts{display:flex; align-items:center; justify-content:center; gap:18px; margin-top:14px; flex-wrap:wrap}
   .chk{display:inline-flex; align-items:center; gap:8px; color:var(--muted); font-size:14px; cursor:pointer; user-select:none}
   .chk input{width:16px;height:16px;accent-color:var(--g1)}
+  .seg{display:inline-flex; border:1px solid var(--stroke); border-radius:12px; overflow:hidden; background:rgba(0,0,0,.25)}
+  .segopt{cursor:pointer}
+  .segopt input{position:absolute; opacity:0; pointer-events:none}
+  .segopt span{
+    display:inline-flex; align-items:baseline; gap:6px;
+    padding:9px 14px; font-size:13.5px; font-weight:600; color:var(--muted);
+    transition:background .15s, color .15s;
+  }
+  .segopt small{font-size:11px; font-weight:500; opacity:.75}
+  .segopt input:checked + span{
+    background:linear-gradient(90deg, rgba(255,46,151,.25), rgba(168,85,247,.25));
+    color:var(--text);
+  }
+  .warnbox{
+    margin-top:10px; padding:12px 14px; border-radius:12px; font-size:13.5px; line-height:1.5;
+    background:rgba(255,210,63,.08); border:1px solid rgba(255,210,63,.35); color:#ffe9a8;
+  }
+  .warnbox button{
+    margin-top:8px; cursor:pointer; border:0; border-radius:10px; padding:9px 14px;
+    font-size:13.5px; font-weight:700; color:#151022;
+    background:linear-gradient(90deg,var(--g3),var(--g2));
+  }
 
   .status{margin-top:20px; min-height:0; text-align:left}
   .status.show{min-height:64px}
@@ -141,6 +163,12 @@
         <button id="go" class="go" type="submit">Скачать</button>
       </form>
       <div class="opts">
+        <div class="seg" id="qualitySeg" role="radiogroup" aria-label="Качество">
+          <label class="segopt"><input type="radio" name="quality" value="max" checked />
+            <span>Максимум <small>до 8K</small></span></label>
+          <label class="segopt"><input type="radio" name="quality" value="compat" />
+            <span>1080p <small>играет везде</small></span></label>
+        </div>
         <label class="chk"><input id="audio" type="checkbox" /> Только звук (MP3)</label>
       </div>
 
@@ -192,13 +220,28 @@
       '</span><span>' + esc(right.join(' · ')) + '</span></div>';
   }
 
-  function renderDone(token, filename) {
+  function renderDone(token, filename, vcodec) {
     status.className = 'status show';
-    status.innerHTML =
+    var html =
       '<div class="result"><span class="ico">✅</span>' +
       '<div class="txt"><div class="name">' + esc(filename) + '</div>' +
       '<div class="sub">Готово. Загрузка началась автоматически.</div></div>' +
       '<a class="dl" href="/api/file/' + token + '">Скачать снова</a></div>';
+    // AV1/VP9 — QuickTime и «Просмотр» на маке такое не покажут (звук будет, картинки нет).
+    if (vcodec && !/^(h264|avc|hevc|h265|mpeg4|mp3|aac)/i.test(vcodec)) {
+      html +=
+        '<div class="warnbox">⚠️ Видео в кодеке <b>' + esc(vcodec.toUpperCase()) +
+        '</b> — стандартный QuickTime покажет только звук без картинки. ' +
+        'Открой файл в <b>Chrome</b> или <b>VLC</b>, либо скачай версию для QuickTime:' +
+        '<br /><button id="redlCompat" type="button">Скачать 1080p — играет везде</button></div>';
+    }
+    status.innerHTML = html;
+    var btn = document.getElementById('redlCompat');
+    if (btn) btn.addEventListener('click', function () {
+      var seg = document.querySelector('#qualitySeg input[value=compat]');
+      if (seg) seg.checked = true;
+      form.requestSubmit();
+    });
   }
 
   function renderError(msg) {
@@ -227,7 +270,10 @@
     go.textContent = 'Качаю…';
     renderProgress({ percent: null, phase: 'download' });
 
-    var q = '/api/download?url=' + encodeURIComponent(url) + '&audio=' + (audio.checked ? '1' : '0');
+    var qsel = document.querySelector('#qualitySeg input:checked');
+    var q = '/api/download?url=' + encodeURIComponent(url) +
+      '&audio=' + (audio.checked ? '1' : '0') +
+      '&quality=' + (qsel ? qsel.value : 'max');
     es = new EventSource(q);
 
     es.addEventListener('progress', function (ev) { renderProgress(JSON.parse(ev.data)); });
@@ -237,7 +283,7 @@
     });
     es.addEventListener('done', function (ev) {
       var d = JSON.parse(ev.data);
-      renderDone(d.token, d.filename);
+      renderDone(d.token, d.filename, d.vcodec);
       // старт скачивания
       var a = document.createElement('a');
       a.href = '/api/file/' + d.token;

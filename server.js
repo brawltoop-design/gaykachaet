@@ -65,6 +65,7 @@ const MERGE_FORMAT = process.env.MERGE_FORMAT || 'mp4';
 function handleDownload(req, res, query) {
   const url = (query.get('url') || '').trim();
   const audioOnly = query.get('audio') === '1';
+  const compat = query.get('quality') === 'compat';
 
   if (!/^https?:\/\//i.test(url)) {
     sseInit(res);
@@ -94,12 +95,22 @@ function handleDownload(req, res, query) {
 
   if (audioOnly) {
     args.push('-x', '--audio-format', 'mp3', '--audio-quality', '0');
+  } else if (compat) {
+    // Режим «играет везде»: только H.264+AAC — QuickTime, Safari, телефоны,
+    // телевизоры. На YouTube это максимум 1080p. Фолбэки — для сайтов,
+    // где H.264 не раздают вовсе.
+    args.push(
+      '-f', 'bv*[vcodec^=avc1]+ba[acodec^=mp4a]/bv*[vcodec^=avc1]+ba/bv*+ba/b',
+      '-S', 'res,fps,vcodec:h264,acodec:aac',
+      '--merge-output-format', MERGE_FORMAT
+    );
   } else {
     // Идеальнейшее качество: лучшее видео + лучший звук, склейка в один файл.
     // Приоритет — максимальное разрешение и fps; при равенстве предпочитаем
     // H.264/AAC, чтобы файл открывался везде (QuickTime, Safari, телефоны).
     // Экзотичные кодеки (AV1/VP9/Opus) берутся только там, где без них
-    // недоступно более высокое разрешение (4K/8K).
+    // недоступно более высокое разрешение (4K/8K) — QuickTime такие не играет,
+    // фронт покажет подсказку (см. vcodec в событии done).
     args.push(
       '-f', 'bv*+ba/b',
       '-S', 'res,fps,vcodec:h264,acodec:aac',
@@ -184,8 +195,10 @@ function handleDownload(req, res, query) {
     }
 
     const { token, filename } = registerFile(dir, filepath);
-    sseSend(res, 'done', { token, filename });
-    res.end();
+    probeVcodec(filepath, (vcodec) => {
+      sseSend(res, 'done', { token, filename, vcodec });
+      res.end();
+    });
   });
 
   // Клиент ушёл — гасим процесс и чистим временную папку.
@@ -333,6 +346,23 @@ function clean(s) {
 function shorten(s) {
   if (!s) return '';
   return s.length > 160 ? s.slice(0, 157) + '…' : s;
+}
+
+// Кодек видеодорожки готового файла — фронт предупредит, если QuickTime его не осилит.
+function probeVcodec(filepath, cb) {
+  const ff = spawn('ffprobe', [
+    '-v', 'error',
+    '-select_streams', 'v:0',
+    '-show_entries', 'stream=codec_name',
+    '-of', 'csv=p=0',
+    filepath,
+  ], { windowsHide: true });
+  let out = '';
+  let called = false;
+  const once = (v) => { if (!called) { called = true; cb(v); } };
+  ff.stdout.on('data', (d) => { out += d; });
+  ff.on('error', () => once(''));
+  ff.on('close', () => once(out.trim().split('\n')[0] || ''));
 }
 
 // Переводим частые ошибки yt-dlp в понятные подсказки.
