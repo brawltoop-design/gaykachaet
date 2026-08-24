@@ -205,7 +205,8 @@
     <p class="hint">
       Работает с <b>YouTube</b>, <b>TikTok</b>, <b>Instagram</b>, <b>X&nbsp;(Twitter)</b>,
       <b>Twitch</b>, <b>VK</b>, <b>Reddit</b> и сотнями других сайтов.<br />
-      Качество выбирается автоматически — максимально доступное видео&nbsp;+&nbsp;звук склеиваются в один файл.
+      Качество выбирается автоматически — максимально доступное видео&nbsp;+&nbsp;звук склеиваются в один файл.<br />
+      🖼️ <b>Карусели Instagram</b> скачиваются целиком одним ZIP-архивом (нужен вход в Instagram в Chrome).
     </p>
     <p class="foot">На движке <code>yt-dlp</code> + <code>ffmpeg</code>. Скачивай только то, на что у тебя есть права.</p>
   </main>
@@ -243,7 +244,8 @@
     download: 'Загрузка…',
     merge: 'Склейка видео и звука…',
     convert: 'Обработка…',
-    h264: 'Конвертация в H.264…'
+    h264: 'Конвертация в H.264…',
+    zip: 'Упаковка в архив…'
   };
 
   function esc(s){ return (s||'').replace(/[&<>"]/g, function(c){
@@ -267,12 +269,15 @@
       '</span><span>' + esc(right.join(' · ')) + '</span></div>';
   }
 
-  function renderDone(token, filename, vcodec) {
+  function renderDone(token, filename, vcodec, items) {
     status.className = 'status show';
+    var sub = items > 1
+      ? 'Карусель: ' + items + ' файлов в архиве. Загрузка началась автоматически.'
+      : 'Готово. Загрузка началась автоматически.';
     var html =
-      '<div class="result"><span class="ico">✅</span>' +
+      '<div class="result"><span class="ico">' + (items > 1 ? '🖼️' : '✅') + '</span>' +
       '<div class="txt"><div class="name">' + esc(filename) + '</div>' +
-      '<div class="sub">Готово. Загрузка началась автоматически.</div></div>' +
+      '<div class="sub">' + sub + '</div></div>' +
       '<a class="dl" href="/api/file/' + token + '">Скачать снова</a></div>';
     // AV1/VP9 — QuickTime и «Просмотр» на маке такое не покажут (звук будет, картинки нет).
     if (vcodec && !/^(h264|avc|hevc|h265|mpeg4|mp3|aac)/i.test(vcodec)) {
@@ -340,7 +345,7 @@
     });
     es.addEventListener('done', function (ev) {
       var d = JSON.parse(ev.data);
-      renderDone(d.token, d.filename, d.vcodec);
+      renderDone(d.token, d.filename, d.vcodec, d.items);
       // старт скачивания
       var a = document.createElement('a');
       a.href = '/api/file/' + d.token;

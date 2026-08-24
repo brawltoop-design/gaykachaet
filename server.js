@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const { makeZip } = require('./zip');
 
 const PORT = process.env.PORT || 8787;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -61,6 +62,25 @@ function sseSend(res, event, data) {
 // ---------- yt-dlp download ----------
 
 const MERGE_FORMAT = process.env.MERGE_FORMAT || 'mp4';
+// Браузер, из которого брать cookies для сайтов с обязательным логином
+// (Instagram). Пусто = не использовать cookies вовсе.
+const COOKIES_BROWSER = process.env.COOKIES_BROWSER !== undefined
+  ? process.env.COOKIES_BROWSER
+  : 'chrome';
+
+// Сайты, где один пост может содержать несколько файлов (карусель).
+const GALLERY_HOSTS = (process.env.GALLERY_HOSTS || 'instagram.com')
+  .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+const GALLERY_MAX_ITEMS = parseInt(process.env.GALLERY_MAX_ITEMS, 10) || 50;
+
+function isGalleryHost(url) {
+  try {
+    const h = new URL(url).hostname.replace(/^www\./i, '').toLowerCase();
+    return GALLERY_HOSTS.some((g) => h === g || h.endsWith('.' + g));
+  } catch (_) {
+    return false;
+  }
+}
 
 function handleDownload(req, res, query) {
   const url = (query.get('url') || '').trim();
@@ -101,14 +121,30 @@ function handleDownload(req, res, query) {
   const progTemplate =
     'download:@@@%(progress._percent_str)s|%(progress._total_bytes_str)s|%(progress._speed_str)s|%(progress._eta_str)s';
 
+  // Карусель Instagram = «плейлист» из нескольких фото/видео. Для таких сайтов
+  // разрешаем плейлист (иначе скачается только первый слайд); для остальных
+  // держим --no-playlist, чтобы ссылка с &list= не утянула сотню роликов.
+  const gallery = isGalleryHost(url);
+
   const args = [
-    '--no-playlist',
+    gallery ? '--yes-playlist' : '--no-playlist',
     '--newline',
     '--no-warnings',
     '--progress-template', progTemplate,
     '--print-to-file', 'after_move:%(filepath)s', finalPathFile,
-    '-o', outTemplate,
+    '-o', gallery
+      ? path.join(dir, '%(playlist_index|1)02d - %(title).100B [%(id)s].%(ext)s')
+      : outTemplate,
   ];
+
+  if (gallery) {
+    // Карусель — максимум 20 слайдов; лимит страхует от случайной ссылки
+    // на огромный плейлист.
+    args.push('--playlist-end', String(GALLERY_MAX_ITEMS));
+    // Instagram не отдаёт даже публичные посты без авторизации — берём cookies
+    // из браузера, где пользователь уже залогинен.
+    if (COOKIES_BROWSER) args.push('--cookies-from-browser', COOKIES_BROWSER);
+  }
 
   if (trim) {
     // Качаем только нужный отрезок (yt-dlp тянет по HTTP только эти байты).
@@ -122,6 +158,10 @@ function handleDownload(req, res, query) {
 
   if (audioOnly) {
     args.push('-x', '--audio-format', 'mp3', '--audio-quality', '0');
+  } else if (gallery) {
+    // В карусели вперемешку фото и видео. Хвост `best*` — единственный селектор,
+    // который берёт и формат без видео/аудио дорожек (т.е. картинку).
+    args.push('-f', 'bv*+ba/b/best*', '--merge-output-format', MERGE_FORMAT);
   } else if (compat) {
     // Режим «играет везде»: только H.264+AAC — QuickTime, Safari, телефоны,
     // телевизоры. На YouTube это максимум 1080p. Фолбэки — для сайтов,
@@ -214,15 +254,36 @@ function handleDownload(req, res, query) {
       return;
     }
 
-    const filepath = resolveOutputFile(dir, finalPathFile);
-    if (!filepath) {
+    const outFiles = resolveOutputFiles(dir, finalPathFile);
+    if (!outFiles.length) {
       sseSend(res, 'fail', { message: 'Файл не найден после загрузки.' });
       res.end();
       fs.rm(dir, { recursive: true, force: true }, () => {});
       return;
     }
 
-    finishUp(filepath);
+    // Карусель из нескольких файлов — упаковываем в один ZIP.
+    if (outFiles.length > 1) {
+      sseSend(res, 'phase', {
+        phase: 'zip',
+        label: `Упаковка ${outFiles.length} файлов в архив…`,
+      });
+      const zipPath = path.join(dir, zipNameFor(outFiles) + '.zip');
+      makeZip(outFiles, zipPath, (err) => {
+        if (err) {
+          sseSend(res, 'fail', { message: 'Не удалось собрать архив: ' + err.message });
+          res.end();
+          fs.rm(dir, { recursive: true, force: true }, () => {});
+          return;
+        }
+        const { token, filename } = registerFile(dir, zipPath);
+        sseSend(res, 'done', { token, filename, items: outFiles.length });
+        res.end();
+      });
+      return;
+    }
+
+    finishUp(outFiles[0]);
   });
 
   function finishUp(filepath) {
@@ -263,26 +324,41 @@ function handleDownload(req, res, query) {
   });
 }
 
-function resolveOutputFile(dir, finalPathFile) {
-  // 1) Точный путь из --print-to-file.
+// Все готовые файлы загрузки. Для обычного видео — один, для карусели — много.
+function resolveOutputFiles(dir, finalPathFile) {
+  // 1) Точные пути из --print-to-file (по строке на файл).
   try {
-    const recorded = fs.readFileSync(finalPathFile, 'utf8').trim().split('\n').pop();
-    if (recorded && fs.existsSync(recorded)) return recorded;
+    const recorded = fs
+      .readFileSync(finalPathFile, 'utf8')
+      .split('\n')
+      .map((s) => s.trim())
+      .filter((s) => s && fs.existsSync(s));
+    const uniq = [...new Set(recorded)];
+    if (uniq.length) return uniq.sort(byName);
   } catch (_) {}
-  // 2) Фолбэк: самый большой готовый файл в папке.
+  // 2) Фолбэк: всё готовое в папке (без временных .part и служебных точек).
   try {
-    const candidates = fs
+    return fs
       .readdirSync(dir)
       .filter((f) => !f.startsWith('.') && !f.endsWith('.part'))
-      .map((f) => {
-        const p = path.join(dir, f);
-        return { p, size: fs.statSync(p).size };
-      })
-      .sort((a, b) => b.size - a.size);
-    return candidates.length ? candidates[0].p : null;
+      .map((f) => path.join(dir, f))
+      .filter((p) => { try { return fs.statSync(p).isFile(); } catch (_) { return false; } })
+      .sort(byName);
   } catch (_) {
-    return null;
+    return [];
   }
+}
+function byName(a, b) {
+  return path.basename(a).localeCompare(path.basename(b), undefined, { numeric: true });
+}
+
+// Имя архива — по общей части имён файлов карусели.
+function zipNameFor(files) {
+  const first = path.basename(files[0]);
+  // «01 - Заголовок [ID].jpg» → «Заголовок [ID]»
+  const m = first.match(/^\d+\s*-\s*(.+)\.[^.]+$/);
+  const base = (m ? m[1] : first.replace(/\.[^.]+$/, '')).trim();
+  return (base || 'gaykachaet') + ` (${files.length} файлов)`;
 }
 
 // ---------- file serving ----------
@@ -301,11 +377,16 @@ function handleFile(req, res, token) {
       return res.end('Файл больше недоступен.');
     }
 
-    const isMp3 = entry.filename.toLowerCase().endsWith('.mp3');
+    const ext = path.extname(entry.filename).toLowerCase();
+    const MIME = {
+      '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.zip': 'application/zip',
+      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+      '.webp': 'image/webp', '.webm': 'video/webm', '.mkv': 'video/x-matroska',
+    };
     const asciiName = entry.filename.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, '');
 
     res.writeHead(200, {
-      'Content-Type': isMp3 ? 'audio/mpeg' : 'video/mp4',
+      'Content-Type': MIME[ext] || 'video/mp4',
       'Content-Length': stat.size,
       'Content-Disposition':
         `attachment; filename="${asciiName}"; ` +
@@ -501,7 +582,19 @@ function friendlyError(s) {
   if (/Sign in to confirm|not a bot/i.test(s)) {
     return 'YouTube требует подтверждение (антибот). С серверных IP это частое дело — нужны cookies браузера, см. README.';
   }
-  if (/Private video|Video unavailable|removed/i.test(s)) {
+  if (/empty media response|login required|requested content is not available|Restricted Video/i.test(s)) {
+    return 'Instagram не отдаёт этот пост без авторизации. Залогинься в Instagram в Chrome (сервис берёт cookies оттуда) и попробуй снова.';
+  }
+  if (/could not (copy|find).*cookie|unable to (open|decrypt).*cookie|Permission denied.*Cookies/i.test(s)) {
+    return 'Не удалось прочитать cookies из Chrome. Полностью закрой Chrome и попробуй ещё раз, либо разреши доступ к «Связке ключей».';
+  }
+  if (/\[Instagram\].*(400|404|Bad Request|not found)/i.test(s)) {
+    return 'Пост не найден. Проверь ссылку (нужен адрес вида instagram.com/p/… или /reel/…). Если пост из закрытого аккаунта — залогинься в Instagram в Chrome.';
+  }
+  if (/rate.?limit|Please wait a few minutes|429/i.test(s)) {
+    return 'Instagram временно ограничил запросы. Подожди несколько минут и попробуй снова.';
+  }
+  if (/Private video|Video unavailable|removed|private account/i.test(s)) {
     return 'Видео недоступно: приватное, удалено или закрыто по региону.';
   }
   if (/Unsupported URL/i.test(s)) {
