@@ -141,6 +141,11 @@ function handleDownload(req, res, query) {
     // Карусель — максимум 20 слайдов; лимит страхует от случайной ссылки
     // на огромный плейлист.
     args.push('--playlist-end', String(GALLERY_MAX_ITEMS));
+    // Фото в карусели у yt-dlp не считаются «форматом» (это видеокачалка),
+    // зато доступны как превью — причём в полном разрешении (3072×4096).
+    // Поэтому: не падать на слайдах без видео и забирать картинку.
+    // Превью, дублирующие видео, отсеиваются потом (dropVideoThumbnails).
+    args.push('--ignore-no-formats-error', '--write-thumbnail');
     // Instagram не отдаёт даже публичные посты без авторизации — берём cookies
     // из браузера, где пользователь уже залогинен.
     if (COOKIES_BROWSER) args.push('--cookies-from-browser', COOKIES_BROWSER);
@@ -245,18 +250,14 @@ function handleDownload(req, res, query) {
     if (finished) return;
     finished = true;
 
-    if (code !== 0) {
-      sseSend(res, 'fail', {
-        message: friendlyError(lastError) || 'Не удалось скачать это видео.',
-      });
-      res.end();
-      fs.rm(dir, { recursive: true, force: true }, () => {});
-      return;
-    }
-
-    const outFiles = resolveOutputFiles(dir, finalPathFile);
+    // Судим по результату, а не по коду возврата: на карусели с фото yt-dlp
+    // отдаёт код 2 («нет видеоформатов»), хотя все файлы скачаны.
+    const outFiles = resolveOutputFiles(dir, finalPathFile, gallery);
     if (!outFiles.length) {
-      sseSend(res, 'fail', { message: 'Файл не найден после загрузки.' });
+      sseSend(res, 'fail', {
+        message: friendlyError(lastError) ||
+          (code !== 0 ? 'Не удалось скачать это видео.' : 'Файл не найден после загрузки.'),
+      });
       res.end();
       fs.rm(dir, { recursive: true, force: true }, () => {});
       return;
@@ -287,6 +288,13 @@ function handleDownload(req, res, query) {
   });
 
   function finishUp(filepath) {
+    // Картинку не конвертируем: ffprobe видит в JPEG кодек mjpeg, и без этой
+    // проверки фото поехало бы перекодироваться в видео.
+    if (IMAGE_RE.test(filepath)) {
+      const { token, filename } = registerFile(dir, filepath);
+      sseSend(res, 'done', { token, filename });
+      return res.end();
+    }
     probeMedia(filepath, (info) => {
       const exotic = info.vcodec && !/^(h264|avc|hevc|h265|mpeg4)/i.test(info.vcodec);
       if (!(wantH264 && !audioOnly && exotic)) {
@@ -324,8 +332,41 @@ function handleDownload(req, res, query) {
   });
 }
 
+const IMAGE_RE = /\.(jpe?g|png|webp|heic|avif)$/i;
+
+// Из пары «видео + его превью» (одинаковое имя, разное расширение)
+// оставляем только видео. Одинокие картинки — это слайды-фото, их держим.
+function dropVideoThumbnails(files) {
+  const groups = new Map();
+  for (const f of files) {
+    const stem = f.replace(/\.[^.\/]+$/, '');
+    if (!groups.has(stem)) groups.set(stem, []);
+    groups.get(stem).push(f);
+  }
+  const out = [];
+  for (const group of groups.values()) {
+    const media = group.filter((f) => !IMAGE_RE.test(f));
+    out.push(...(media.length ? media : group.slice(0, 1)));
+  }
+  return out;
+}
+
 // Все готовые файлы загрузки. Для обычного видео — один, для карусели — много.
-function resolveOutputFiles(dir, finalPathFile) {
+function resolveOutputFiles(dir, finalPathFile, gallery) {
+  // В карусели часть слайдов — фото, которых нет в --print-to-file,
+  // поэтому берём всё из папки.
+  if (gallery) {
+    try {
+      const all = fs
+        .readdirSync(dir)
+        .filter((f) => !f.startsWith('.') && !f.endsWith('.part'))
+        .map((f) => path.join(dir, f))
+        .filter((p) => { try { return fs.statSync(p).isFile(); } catch (_) { return false; } });
+      return dropVideoThumbnails(all).sort(byName);
+    } catch (_) {
+      return [];
+    }
+  }
   // 1) Точные пути из --print-to-file (по строке на файл).
   try {
     const recorded = fs
